@@ -2,7 +2,7 @@
   "name": "Agent.Tasks.Ant",
   "version": "1.0.52",
   "author": "Microsoft Corporation",
-  "description": "Build with Gradle",
+  "description": "Build with Ant",
   "license": "MIT",
   "bugs": {
     "url": "https://github.com/Microsoft/vso-agent-tasks/issues"
