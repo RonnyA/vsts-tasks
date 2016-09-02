@@ -1,19 +1,20 @@
 ﻿/// <reference path="../../definitions/vsts-task-lib.d.ts" />
+/// <reference path="../../definitions/codecoveragefactory.d.ts" />
 
 import tl = require('vsts-task-lib/task');
 import fs = require('fs');
 import path = require('path');
+import * as Q from "q";
+import os = require('os');
 
-// Lowercased file names are to lessen the likelihood of xplat issues
 import sqCommon = require('./CodeAnalysis/SonarQube/common');
 import sqGradle = require('./CodeAnalysis/gradlesonar');
-
 import {CodeAnalysisOrchestrator} from './CodeAnalysis/Common/CodeAnalysisOrchestrator';
 import {BuildOutput, BuildEngine} from './CodeAnalysis/Common/BuildOutput';
 import {PmdTool} from './CodeAnalysis/Common/PmdTool';
 import {CheckstyleTool} from './CodeAnalysis/Common/CheckstyleTool';
-
-import os = require('os');
+import {CodeCoverageEnablerFactory} from 'codecoverage-tools/codecoveragefactory';
+import sshCommon = require('ssh-common/ssh-common');
 
 var isWindows = os.type().match(/^Win/);
 
@@ -43,7 +44,7 @@ if (!cwd) {
 }
 tl.cd(cwd);
 
-var gb = tl.createToolRunner(wrapperScript);
+var gb = tl.tool(wrapperScript);
 var javaHomeSelection = tl.getInput('javaHomeSelection', true);
 var specifiedJavaHome = null;
 var ccTool = tl.getInput('codeCoverageTool');
@@ -54,6 +55,7 @@ var summaryFile: string = null;
 var reportDirectory: string = null;
 var inputTasks: string[] = tl.getDelimitedInput('tasks', ' ', true);
 var isSonarQubeEnabled: boolean = sqCommon.isSonarQubeAnalysisEnabled();
+let reportingTaskName = "";
 
 let buildOutput: BuildOutput = new BuildOutput(tl.getVariable('build.sourcesDirectory'), BuildEngine.Gradle);
 var codeAnalysisOrchestrator = new CodeAnalysisOrchestrator(
@@ -64,7 +66,7 @@ if (isCodeCoverageOpted && inputTasks.indexOf('clean') == -1) {
     gb.arg('clean'); //if user opts for code coverage, we append clean functionality to make sure any uninstrumented class files are removed
 }
 
-gb.argString(tl.getInput('options', false));
+gb.arg(tl.getInput('options', false));
 gb.arg(inputTasks);
 
 // update JAVA_HOME if user selected specific JDK version or set path manually
@@ -94,42 +96,50 @@ if (specifiedJavaHome) {
     tl.debug('Set JAVA_HOME to ' + specifiedJavaHome);
     process.env['JAVA_HOME'] = specifiedJavaHome;
 }
-
-if (isCodeCoverageOpted) {
-    tl.debug("Option to enable code coverage was selected and is being applied.");
-    enableCodeCoverage();
-}
-
-if (isSonarQubeEnabled) {
-    // Looks like: 'SonarQube analysis is enabled.'
-    console.log(tl.loc('codeAnalysis_ToolIsEnabled'), sqCommon.toolName);
-
-    gb = sqGradle.applyEnabledSonarQubeArguments(gb);
-    gb = sqGradle.applySonarQubeCodeCoverageArguments(gb, isCodeCoverageOpted, ccTool, summaryFile);
-}
-
-gb = codeAnalysisOrchestrator.configureBuild(gb);
-
-setGradleOpts();
-
-var gradleResult;
-gb.exec()
-    .then(function (code) {
-        gradleResult = code;
-
-        publishTestResults(publishJUnitResults, testResultsFiles);
-        publishCodeCoverage(isCodeCoverageOpted);
-        return processCodeAnalysisResults();
-    })
-    .then(() => {
-        tl.exit(gradleResult);
-    })
-    .fail(function (err) {
-        publishTestResults(publishJUnitResults, testResultsFiles);
-        console.error(err);
-        tl.debug('taskRunner fail');
-        tl.exit(1);
+ 
+/* Trigger code coverage enable flow and then build */
+enableCodeCoverage()
+    .then(function (resp) {
+        gb.arg(reportingTaskName);
+    }).catch(function (err) {
+        tl.warning("Failed to enable code coverage: " + err);
+    }).fin(function () {
+        setGradleOpts();
+        enableSonarQubeAnalysis();
+        execBuild();
     });
+
+/* Actual execution of Build and further flows*/
+function execBuild() {
+    var gradleResult;
+    gb.exec()
+        .then(function (code) {
+            gradleResult = code;
+            publishTestResults(publishJUnitResults, testResultsFiles);
+            publishCodeCoverage(isCodeCoverageOpted);
+            return processCodeAnalysisResults();
+        })
+        .then(() => {
+            tl.exit(gradleResult);
+        })
+        .fail(function (err) {
+            publishTestResults(publishJUnitResults, testResultsFiles);
+            console.error(err);
+            tl.debug('taskRunner fail');
+            tl.exit(1);
+        });
+}
+
+function enableSonarQubeAnalysis() {
+    if (isSonarQubeEnabled) {
+        // Looks like: 'SonarQube analysis is enabled.'
+        console.log(tl.loc('codeAnalysis_ToolIsEnabled'), sqCommon.toolName);
+
+        gb = sqGradle.applyEnabledSonarQubeArguments(gb);
+        gb = sqGradle.applySonarQubeCodeCoverageArguments(gb, isCodeCoverageOpted, ccTool, summaryFile);
+    }
+    gb = codeAnalysisOrchestrator.configureBuild(gb);
+}
 
 function processCodeAnalysisResults(): Q.Promise<void> {
 
@@ -174,7 +184,12 @@ function publishTestResults(publishJUnitResults, testResultsFiles: string) {
     }
 }
 
-function enableCodeCoverage() {
+function enableCodeCoverage(): Q.Promise<any> {
+    if (!isCodeCoverageOpted) {
+        return Q.resolve(true);
+    }
+
+    tl.debug("Option to enable code coverage was selected and is being applied.");
     var classFilter: string = tl.getInput('classFilter');
     var classFilesDirectories: string = tl.getInput('classFilesDirectories');
     var buildRootPath = cwd;
@@ -186,15 +201,15 @@ function enableCodeCoverage() {
         var summaryFileName = "summary.xml";
 
         if (isMultiModule) {
-            var reportingTaskName = "jacocoRootReport";
+            reportingTaskName = "jacocoRootReport";
         }
         else {
-            var reportingTaskName = "jacocoTestReport";
+            reportingTaskName = "jacocoTestReport";
         }
     }
     else if (ccTool.toLowerCase() == "cobertura") {
         var summaryFileName = "coverage.xml";
-        var reportingTaskName = "cobertura";
+        reportingTaskName = "cobertura";
     }
 
     summaryFile = path.join(reportDirectory, summaryFileName);
@@ -209,21 +224,14 @@ function enableCodeCoverage() {
     buildProps['reportdirectory'] = reportDirectoryName;
     buildProps['ismultimodule'] = String(isMultiModule);
 
-    try {
-        var codeCoverageEnabler = new tl.CodeCoverageEnabler('Gradle', ccTool);
-        codeCoverageEnabler.enableCodeCoverage(buildProps);
-        tl.debug("Code coverage is successfully enabled.");
-    }
-    catch (Error) {
-        tl.warning("Enabling code coverage failed. Check the build logs for errors.");
-    }
-    gb.arg(reportingTaskName);
+    let ccEnabler = new CodeCoverageEnablerFactory().getTool("gradle", ccTool.toLowerCase());
+    return ccEnabler.enableCodeCoverage(buildProps);
 }
 
 function isMultiModuleProject(wrapperScript: string): boolean {
-    var gradleBuild = tl.createToolRunner(wrapperScript);
+    var gradleBuild = tl.tool(wrapperScript);
     gradleBuild.arg("properties");
-    gradleBuild.argString(tl.getInput('options', false));
+    gradleBuild.arg(tl.getInput('options', false));
 
     var data = gradleBuild.execSync().stdout;
     if (typeof data != "undefined" && data) {
