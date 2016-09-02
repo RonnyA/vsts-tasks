@@ -100,6 +100,7 @@ if (specifiedJavaHome) {
 /* Trigger code coverage enable flow and then build */
 enableCodeCoverage()
     .then(function (resp) {
+        tl.debug("Enabled code coverage successfully: " + reportingTaskName);
         gb.arg(reportingTaskName);
     }).catch(function (err) {
         tl.warning("Failed to enable code coverage: " + err);

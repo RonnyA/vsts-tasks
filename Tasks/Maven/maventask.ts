@@ -113,8 +113,9 @@ if (specifiedJavaHome) {
 enableCodeCoverage()
     .then(function (resp) {
         ccReportTask = "jacoco:report";
+        tl.debug("Enabled code coverage successfully: " + ccReportTask);
     }).catch(function (err) {
-        tl.warning("Enabling code coverage failed. Check the build logs for errors.");
+        tl.warning("Failed to enable code coverage: " + err);
     }).fin(function () {
         execBuild();
     });

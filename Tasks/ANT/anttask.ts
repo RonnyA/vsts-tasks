@@ -111,8 +111,8 @@ async function doWork() {
         buildProps['reportdirectory'] = reportDirectory;
         buildProps['ccreporttask'] = "CodeCoverage_9064e1d0"
         buildProps['reportbuildfile'] = reportBuildFile;
-        
-         let ccEnabler = new CodeCoverageEnablerFactory().getTool("ant", ccTool.toLowerCase());
+
+        let ccEnabler = new CodeCoverageEnablerFactory().getTool("ant", ccTool.toLowerCase());
         return ccEnabler.enableCodeCoverage(buildProps);
     }
 
@@ -221,10 +221,11 @@ async function doWork() {
 
         enableCodeCoverage().then(function (resp) {
             ccReportTask = "CodeCoverage_9064e1d0";
+            tl.debug("Enabled code coverage successfully: " + ccReportTask);
         }).catch(function (err) {
             tl.warning("Failed to enable code coverage: " + err);
         }).fin(function () {
-            
+
             //antv.exec();
             var buffer;
             antb.on('stdout', (data) => {
